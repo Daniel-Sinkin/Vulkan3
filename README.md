@@ -1,7 +1,6 @@
 # Vulkan3
 
 ```
-cd ~/GitHub_private/Vulkan3
 cmake -S . -B build -G Ninja \
   -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++ \

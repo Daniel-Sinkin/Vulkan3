@@ -21,16 +21,8 @@
 #include <stdio.h>  // printf, fprintf
 #include <stdlib.h> // abort
 
-// This example doesn't compile with Emscripten yet! Awaiting SDL3 support.
-#ifdef __EMSCRIPTEN__
-#include "../libs/emscripten/emscripten_mainloop_stub.h"
-#endif
-
-// Volk headers
-#ifdef IMGUI_IMPL_VULKAN_USE_VOLK
-#define VOLK_IMPLEMENTATION
-#include <volk.h>
-#endif
+#include "constants.hpp"
+#include "types.hpp"
 
 // #define APP_USE_UNLIMITED_FRAME_RATE
 #ifdef _DEBUG
@@ -38,27 +30,27 @@
 static VkDebugReportCallbackEXT g_DebugReport = VK_NULL_HANDLE;
 #endif
 
+namespace DSEngine
+{
 // Data
 static VkAllocationCallbacks *g_Allocator = nullptr;
 static VkInstance g_Instance = VK_NULL_HANDLE;
 static VkPhysicalDevice g_PhysicalDevice = VK_NULL_HANDLE;
 static VkDevice g_Device = VK_NULL_HANDLE;
-static uint32_t g_QueueFamily = (uint32_t)-1;
+static u32 g_QueueFamily = DSEngine::Constants::queue_family_uninitialised;
 static VkQueue g_Queue = VK_NULL_HANDLE;
 static VkPipelineCache g_PipelineCache = VK_NULL_HANDLE;
 static VkDescriptorPool g_DescriptorPool = VK_NULL_HANDLE;
 
 static ImGui_ImplVulkanH_Window g_MainWindowData;
-static uint32_t g_MinImageCount = 2;
+static u32 g_MinImageCount = 2;
 static bool g_SwapChainRebuild = false;
 
 static void check_vk_result(VkResult err)
 {
-    if (err == VK_SUCCESS)
-        return;
+    if (err == VK_SUCCESS) return;
     fprintf(stderr, "[vulkan] Error: VkResult = %d\n", err);
-    if (err < 0)
-        abort();
+    if (err < 0) abort();
 }
 
 #ifdef APP_USE_VULKAN_DEBUG_REPORT
@@ -86,9 +78,6 @@ static bool IsExtensionAvailable(const ImVector<VkExtensionProperties> &properti
 static void SetupVulkan(ImVector<const char *> instance_extensions)
 {
     VkResult err;
-#ifdef IMGUI_IMPL_VULKAN_USE_VOLK
-    volkInitialize();
-#endif
 
     // Create Vulkan Instance
     {
@@ -96,7 +85,7 @@ static void SetupVulkan(ImVector<const char *> instance_extensions)
         create_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 
         // Enumerate available extensions
-        uint32_t properties_count;
+        u32 properties_count;
         ImVector<VkExtensionProperties> properties;
         vkEnumerateInstanceExtensionProperties(nullptr, &properties_count, nullptr);
         properties.resize(properties_count);
@@ -123,13 +112,10 @@ static void SetupVulkan(ImVector<const char *> instance_extensions)
 #endif
 
         // Create Vulkan Instance
-        create_info.enabledExtensionCount = (uint32_t)instance_extensions.Size;
+        create_info.enabledExtensionCount = (u32)instance_extensions.Size;
         create_info.ppEnabledExtensionNames = instance_extensions.Data;
         err = vkCreateInstance(&create_info, g_Allocator, &g_Instance);
         check_vk_result(err);
-#ifdef IMGUI_IMPL_VULKAN_USE_VOLK
-        volkLoadInstance(g_Instance);
-#endif
 
         // Setup the debug report callback
 #ifdef APP_USE_VULKAN_DEBUG_REPORT
@@ -151,7 +137,7 @@ static void SetupVulkan(ImVector<const char *> instance_extensions)
 
     // Select graphics queue family
     g_QueueFamily = ImGui_ImplVulkanH_SelectQueueFamilyIndex(g_PhysicalDevice);
-    IM_ASSERT(g_QueueFamily != (uint32_t)-1);
+    IM_ASSERT(g_QueueFamily != DSEngine::Constants::queue_family_uninitialised);
 
     // Create Logical Device (with 1 queue)
     {
@@ -159,7 +145,7 @@ static void SetupVulkan(ImVector<const char *> instance_extensions)
         device_extensions.push_back("VK_KHR_swapchain");
 
         // Enumerate physical device extension
-        uint32_t properties_count;
+        u32 properties_count;
         ImVector<VkExtensionProperties> properties;
         vkEnumerateDeviceExtensionProperties(g_PhysicalDevice, nullptr, &properties_count, nullptr);
         properties.resize(properties_count);
@@ -179,7 +165,7 @@ static void SetupVulkan(ImVector<const char *> instance_extensions)
         create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         create_info.queueCreateInfoCount = sizeof(queue_info) / sizeof(queue_info[0]);
         create_info.pQueueCreateInfos = queue_info;
-        create_info.enabledExtensionCount = (uint32_t)device_extensions.Size;
+        create_info.enabledExtensionCount = (u32)device_extensions.Size;
         create_info.ppEnabledExtensionNames = device_extensions.Data;
         err = vkCreateDevice(g_PhysicalDevice, &create_info, g_Allocator, &g_Device);
         check_vk_result(err);
@@ -199,7 +185,7 @@ static void SetupVulkan(ImVector<const char *> instance_extensions)
         pool_info.maxSets = 0;
         for (VkDescriptorPoolSize &pool_size : pool_sizes)
             pool_info.maxSets += pool_size.descriptorCount;
-        pool_info.poolSizeCount = (uint32_t)IM_ARRAYSIZE(pool_sizes);
+        pool_info.poolSizeCount = (u32)IM_ARRAYSIZE(pool_sizes);
         pool_info.pPoolSizes = pool_sizes;
         err = vkCreateDescriptorPool(g_Device, &pool_info, g_Allocator, &g_DescriptorPool);
         check_vk_result(err);
@@ -264,13 +250,9 @@ static void FrameRender(ImGui_ImplVulkanH_Window *wd, ImDrawData *draw_data)
     VkSemaphore image_acquired_semaphore = wd->FrameSemaphores[wd->SemaphoreIndex].ImageAcquiredSemaphore;
     VkSemaphore render_complete_semaphore = wd->FrameSemaphores[wd->SemaphoreIndex].RenderCompleteSemaphore;
     VkResult err = vkAcquireNextImageKHR(g_Device, wd->Swapchain, UINT64_MAX, image_acquired_semaphore, VK_NULL_HANDLE, &wd->FrameIndex);
-    if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR)
-        g_SwapChainRebuild = true;
-    if (err == VK_ERROR_OUT_OF_DATE_KHR)
-        return;
-    if (err != VK_SUBOPTIMAL_KHR)
-        check_vk_result(err);
-
+    if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) g_SwapChainRebuild = true;
+    if (err == VK_ERROR_OUT_OF_DATE_KHR) return;
+    if (err != VK_SUBOPTIMAL_KHR) check_vk_result(err);
     ImGui_ImplVulkanH_Frame *fd = &wd->Frames[wd->FrameIndex];
     {
         err = vkWaitForFences(g_Device, 1, &fd->Fence, VK_TRUE, UINT64_MAX); // wait indefinitely instead of periodically checking
@@ -337,17 +319,14 @@ static void FramePresent(ImGui_ImplVulkanH_Window *wd)
     info.pSwapchains = &wd->Swapchain;
     info.pImageIndices = &wd->FrameIndex;
     VkResult err = vkQueuePresentKHR(g_Queue, &info);
-    if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR)
-        g_SwapChainRebuild = true;
-    if (err == VK_ERROR_OUT_OF_DATE_KHR)
-        return;
-    if (err != VK_SUBOPTIMAL_KHR)
-        check_vk_result(err);
+    if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) g_SwapChainRebuild = true;
+    if (err == VK_ERROR_OUT_OF_DATE_KHR) return;
+    if (err != VK_SUBOPTIMAL_KHR) check_vk_result(err);
     wd->SemaphoreIndex = (wd->SemaphoreIndex + 1) % wd->SemaphoreCount; // Now we can use the next set of semaphores
 }
 
 // Main code
-int main(int, char **)
+int main()
 {
     // Setup SDL
     // [If using SDL_MAIN_USE_CALLBACKS: all code below until the main loop starts would likely be your SDL_AppInit() function]
@@ -369,9 +348,9 @@ int main(int, char **)
 
     ImVector<const char *> extensions;
     {
-        uint32_t sdl_extensions_count = 0;
+        u32 sdl_extensions_count = 0;
         const char *const *sdl_extensions = SDL_Vulkan_GetInstanceExtensions(&sdl_extensions_count);
-        for (uint32_t n = 0; n < sdl_extensions_count; n++)
+        for (u32 n = 0; n < sdl_extensions_count; n++)
             extensions.push_back(sdl_extensions[n]);
     }
     SetupVulkan(extensions);
@@ -512,8 +491,8 @@ int main(int, char **)
             ImGui::SliderFloat("float", &f, 0.0f, 1.0f);             // Edit 1 float using a slider from 0.0f to 1.0f
             ImGui::ColorEdit3("clear color", (float *)&clear_color); // Edit 3 floats representing a color
 
-            if (ImGui::Button("Button")) // Buttons return true when clicked (most widgets return true when edited/activated)
-                counter++;
+            // Buttons return true when clicked (most widgets return true when edited/activated)
+            if (ImGui::Button("Button")) counter++;
             ImGui::SameLine();
             ImGui::Text("counter = %d", counter);
 
@@ -561,4 +540,10 @@ int main(int, char **)
     SDL_Quit();
 
     return 0;
+}
+} // namespace DSEngine
+
+int main()
+{
+    return DSEngine::main();
 }
