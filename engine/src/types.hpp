@@ -2,6 +2,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <glm/glm.hpp>
+
 namespace DSEngine
 {
 using u8 = std::uint8_t;
