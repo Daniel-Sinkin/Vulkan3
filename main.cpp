@@ -70,8 +70,9 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_report(VkDebugReportFlagsEXT flags, 
 static bool IsExtensionAvailable(const ImVector<VkExtensionProperties> &properties, const char *extension)
 {
     for (const VkExtensionProperties &p : properties)
-        if (strcmp(p.extensionName, extension) == 0)
-            return true;
+    {
+        if (strcmp(p.extensionName, extension) == 0) return true;
+    }
     return false;
 }
 
@@ -184,7 +185,9 @@ static void SetupVulkan(ImVector<const char *> instance_extensions)
         pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
         pool_info.maxSets = 0;
         for (VkDescriptorPoolSize &pool_size : pool_sizes)
+        {
             pool_info.maxSets += pool_size.descriptorCount;
+        }
         pool_info.poolSizeCount = (u32)IM_ARRAYSIZE(pool_sizes);
         pool_info.pPoolSizes = pool_sizes;
         err = vkCreateDescriptorPool(g_Device, &pool_info, g_Allocator, &g_DescriptorPool);
@@ -255,20 +258,16 @@ static void FrameRender(ImGui_ImplVulkanH_Window *wd, ImDrawData *draw_data)
     if (err != VK_SUBOPTIMAL_KHR) check_vk_result(err);
     ImGui_ImplVulkanH_Frame *fd = &wd->Frames[wd->FrameIndex];
     {
-        err = vkWaitForFences(g_Device, 1, &fd->Fence, VK_TRUE, UINT64_MAX); // wait indefinitely instead of periodically checking
-        check_vk_result(err);
-
-        err = vkResetFences(g_Device, 1, &fd->Fence);
-        check_vk_result(err);
+        // wait indefinitely instead of periodically checking
+        check_vk_result(vkWaitForFences(g_Device, 1, &fd->Fence, VK_TRUE, UINT64_MAX));
+        check_vk_result(vkResetFences(g_Device, 1, &fd->Fence));
     }
     {
-        err = vkResetCommandPool(g_Device, fd->CommandPool, 0);
-        check_vk_result(err);
+        check_vk_result(vkResetCommandPool(g_Device, fd->CommandPool, 0));
         VkCommandBufferBeginInfo info = {};
         info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         info.flags |= VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        err = vkBeginCommandBuffer(fd->CommandBuffer, &info);
-        check_vk_result(err);
+        check_vk_result(vkBeginCommandBuffer(fd->CommandBuffer, &info));
     }
     {
         VkRenderPassBeginInfo info = {};
@@ -299,10 +298,8 @@ static void FrameRender(ImGui_ImplVulkanH_Window *wd, ImDrawData *draw_data)
         info.signalSemaphoreCount = 1;
         info.pSignalSemaphores = &render_complete_semaphore;
 
-        err = vkEndCommandBuffer(fd->CommandBuffer);
-        check_vk_result(err);
-        err = vkQueueSubmit(g_Queue, 1, &info, fd->Fence);
-        check_vk_result(err);
+        check_vk_result(vkEndCommandBuffer(fd->CommandBuffer));
+        check_vk_result(vkQueueSubmit(g_Queue, 1, &info, fd->Fence));
     }
 }
 
@@ -365,10 +362,10 @@ int main()
     }
 
     // Create Framebuffers
-    int w, h;
-    SDL_GetWindowSize(window, &w, &h);
+    int window_width, window_height;
+    SDL_GetWindowSize(window, &window_width, &window_height);
     ImGui_ImplVulkanH_Window *wd = &g_MainWindowData;
-    SetupVulkanWindow(wd, surface, w, h);
+    SetupVulkanWindow(wd, surface, window_width, window_height);
     SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     SDL_ShowWindow(window);
 
@@ -445,9 +442,13 @@ int main()
         {
             ImGui_ImplSDL3_ProcessEvent(&event);
             if (event.type == SDL_EVENT_QUIT)
+            {
                 done = true;
+            }
             if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(window))
+            {
                 done = true;
+            }
         }
 
         // [If using SDL_MAIN_USE_CALLBACKS: all code below would likely be your SDL_AppIterate() function]
@@ -458,7 +459,8 @@ int main()
         }
 
         // Resize swap chain?
-        int fb_width, fb_height;
+        int fb_width;
+        int fb_height;
         SDL_GetWindowSize(window, &fb_width, &fb_height);
         if (fb_width > 0 && fb_height > 0 && (g_SwapChainRebuild || g_MainWindowData.Width != fb_width || g_MainWindowData.Height != fb_height))
         {
