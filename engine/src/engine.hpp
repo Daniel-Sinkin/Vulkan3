@@ -1,6 +1,8 @@
 // engine/src/engine.hpp
 #pragma once
 
+#include <vector>
+
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_vulkan.h"
@@ -17,26 +19,8 @@
 static VkDebugReportCallbackEXT g_DebugReport = VK_NULL_HANDLE;
 #endif
 
-/*
-TODOS:
-    - Remove ImVector, either use custom DynamicArray class or std::vector
-*/
-
 namespace DSEngine
 {
-// Data
-static VkAllocationCallbacks *g_Allocator = nullptr;
-static VkInstance g_Instance = VK_NULL_HANDLE;
-static VkPhysicalDevice g_PhysicalDevice = VK_NULL_HANDLE;
-static VkDevice g_Device = VK_NULL_HANDLE;
-static u32 g_QueueFamily = Constants::queue_family_uninitialised;
-static VkQueue g_Queue = VK_NULL_HANDLE;
-static VkPipelineCache g_PipelineCache = VK_NULL_HANDLE;
-static VkDescriptorPool g_DescriptorPool = VK_NULL_HANDLE;
-
-static ImGui_ImplVulkanH_Window g_MainWindowData;
-static u32 g_MinImageCount = 2;
-static bool g_SwapChainRebuild = false;
 
 static void check_vk_result(VkResult err)
 {
@@ -46,20 +30,53 @@ static void check_vk_result(VkResult err)
 }
 
 #ifdef APP_USE_VULKAN_DEBUG_REPORT
-static VKAPI_ATTR VkBool32 VKAPI_CALL debug_report(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objectType, uint64_t object, size_t location, int32_t messageCode, const char *pLayerPrefix, const char *pMessage, void *pUserData)
+static VKAPI_ATTR VkBool32 VKAPI_CALL debug_report(
+    [[maybe_unused]] VkDebugReportFlagsEXT flags,
+    VkDebugReportObjectTypeEXT objectType,
+    [[maybe_unused]] u64 object,
+    [[maybe_unused]] usize location,
+    [[maybe_unused]] i32 messageCode,
+    [[maybe_unused]] const char *pLayerPrefix,
+    const char *pMessage,
+    [[maybe_unused]] void *pUserData)
 {
-    (void)flags;
-    (void)object;
-    (void)location;
-    (void)messageCode;
-    (void)pUserData;
-    (void)pLayerPrefix; // Unused arguments
     fprintf(stderr, "[vulkan] Debug report from ObjectType: %i\nMessage: %s\n\n", objectType, pMessage);
     return VK_FALSE;
 }
 #endif // APP_USE_VULKAN_DEBUG_REPORT
 
-static bool IsExtensionAvailable(const ImVector<VkExtensionProperties> &properties, const char *extension)
+struct EngineContext
+{
+    VkAllocationCallbacks *m_allocator = nullptr;
+    VkInstance m_instance = VK_NULL_HANDLE;
+    VkPhysicalDevice m_physical_device = VK_NULL_HANDLE;
+    VkDevice m_device = VK_NULL_HANDLE;
+    u32 m_queue_family = Constants::queue_family_uninitialised;
+    VkQueue m_queue = VK_NULL_HANDLE;
+    VkPipelineCache m_pipeline_cache = VK_NULL_HANDLE;
+    VkDescriptorPool m_description_pool = VK_NULL_HANDLE;
+
+    ImGui_ImplVulkanH_Window m_main_window_data; // TODO: Inline this and remove dep on imgui structs
+    u32 m_min_image_count = 2;
+    bool m_rebuild_swapchain = false;
+};
+
+// clang-format off
+static VkAllocationCallbacks*     g_Allocator       = nullptr;
+static VkInstance                 g_Instance        = VK_NULL_HANDLE;
+static VkPhysicalDevice           g_PhysicalDevice  = VK_NULL_HANDLE;
+static VkDevice                   g_Device          = VK_NULL_HANDLE;
+static u32                        g_QueueFamily     = Constants::queue_family_uninitialised;
+static VkQueue                    g_Queue           = VK_NULL_HANDLE;
+static VkPipelineCache            g_PipelineCache   = VK_NULL_HANDLE;
+static VkDescriptorPool           g_DescriptorPool  = VK_NULL_HANDLE;
+
+static ImGui_ImplVulkanH_Window   g_MainWindowData;
+static u32                        g_MinImageCount   = 2;
+static bool                       g_SwapChainRebuild = false;
+// clang-format on
+
+static bool IsExtensionAvailable(const std::vector<VkExtensionProperties> &properties, const char *extension)
 {
     for (const VkExtensionProperties &p : properties)
     {
@@ -68,7 +85,7 @@ static bool IsExtensionAvailable(const ImVector<VkExtensionProperties> &properti
     return false;
 }
 
-static void SetupVulkan(ImVector<const char *> instance_extensions)
+static void SetupVulkan(std::vector<const char *> instance_extensions)
 {
     VkResult err;
 
@@ -79,10 +96,10 @@ static void SetupVulkan(ImVector<const char *> instance_extensions)
 
         // Enumerate available extensions
         u32 properties_count;
-        ImVector<VkExtensionProperties> properties;
+        std::vector<VkExtensionProperties> properties;
         vkEnumerateInstanceExtensionProperties(nullptr, &properties_count, nullptr);
         properties.resize(properties_count);
-        err = vkEnumerateInstanceExtensionProperties(nullptr, &properties_count, properties.Data);
+        err = vkEnumerateInstanceExtensionProperties(nullptr, &properties_count, properties.data());
         check_vk_result(err);
 
         // Enable required extensions
@@ -105,8 +122,8 @@ static void SetupVulkan(ImVector<const char *> instance_extensions)
 #endif
 
         // Create Vulkan Instance
-        create_info.enabledExtensionCount = (u32)instance_extensions.Size;
-        create_info.ppEnabledExtensionNames = instance_extensions.Data;
+        create_info.enabledExtensionCount = (u32)instance_extensions.size();
+        create_info.ppEnabledExtensionNames = instance_extensions.data();
         err = vkCreateInstance(&create_info, g_Allocator, &g_Instance);
         check_vk_result(err);
 
@@ -134,15 +151,15 @@ static void SetupVulkan(ImVector<const char *> instance_extensions)
 
     // Create Logical Device (with 1 queue)
     {
-        ImVector<const char *> device_extensions;
+        std::vector<const char *> device_extensions;
         device_extensions.push_back("VK_KHR_swapchain");
 
         // Enumerate physical device extension
         u32 properties_count;
-        ImVector<VkExtensionProperties> properties;
+        std::vector<VkExtensionProperties> properties;
         vkEnumerateDeviceExtensionProperties(g_PhysicalDevice, nullptr, &properties_count, nullptr);
         properties.resize(properties_count);
-        vkEnumerateDeviceExtensionProperties(g_PhysicalDevice, nullptr, &properties_count, properties.Data);
+        vkEnumerateDeviceExtensionProperties(g_PhysicalDevice, nullptr, &properties_count, properties.data());
 #if DSE_PORTABILITY_REQUIRED
         if (IsExtensionAvailable(properties, "VK_KHR_portability_subset"))
         {
@@ -160,8 +177,8 @@ static void SetupVulkan(ImVector<const char *> instance_extensions)
         create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         create_info.queueCreateInfoCount = sizeof(queue_info) / sizeof(queue_info[0]);
         create_info.pQueueCreateInfos = queue_info;
-        create_info.enabledExtensionCount = (u32)device_extensions.Size;
-        create_info.ppEnabledExtensionNames = device_extensions.Data;
+        create_info.enabledExtensionCount = (u32)device_extensions.size();
+        create_info.ppEnabledExtensionNames = device_extensions.data();
         err = vkCreateDevice(g_PhysicalDevice, &create_info, g_Allocator, &g_Device);
         check_vk_result(err);
         vkGetDeviceQueue(g_Device, g_QueueFamily, 0, &g_Queue);
@@ -336,7 +353,7 @@ int main()
         return 1;
     }
 
-    ImVector<const char *> extensions;
+    std::vector<const char *> extensions;
     {
         u32 sdl_extensions_count = 0;
         const char *const *sdl_extensions = SDL_Vulkan_GetInstanceExtensions(&sdl_extensions_count);
@@ -467,8 +484,7 @@ int main()
         ImGui::NewFrame();
 
         // 1. Show the big demo window (Most of the sample code is in ImGui::ShowDemoWindow()! You can browse its code to learn more about Dear ImGui!).
-        if (show_demo_window)
-            ImGui::ShowDemoWindow(&show_demo_window);
+        if (show_demo_window) ImGui::ShowDemoWindow(&show_demo_window);
 
         // 2. Show a simple window that we create ourselves. We use a Begin/End pair to create a named window.
         {
