@@ -3,5 +3,5 @@
 
 int main()
 {
-    return DSEngine::main();
+    DSEngine::main();
 }
