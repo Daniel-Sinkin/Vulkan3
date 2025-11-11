@@ -3,6 +3,7 @@
 
 #include <array>
 #include <print>
+#include <ranges>
 #include <vector>
 
 #include "imgui.h"
@@ -197,8 +198,87 @@ struct EngineContext
         setup_vulkan_();
     }
 
+    void setup_vulkan_window_select_surface_format()
+    { // TODO: Maybe use other name
+        // TODO: Make this private and integrate into the setup_vulkan chain
+        constexpr std::array<VkFormat, 4> request_surface_image_format = {
+            VK_FORMAT_B8G8R8A8_UNORM,
+            VK_FORMAT_R8G8B8A8_UNORM,
+            VK_FORMAT_B8G8R8_UNORM,
+            VK_FORMAT_R8G8B8_UNORM};
+        const VkColorSpaceKHR request_surface_color_space = VK_COLORSPACE_SRGB_NONLINEAR_KHR;
+        u32 avail_count{};
+        vkGetPhysicalDeviceSurfaceFormatsKHR(m_physical_device, m_surface, &avail_count, nullptr);
+        std::vector<VkSurfaceFormatKHR> avail_format(avail_count);
+        vkGetPhysicalDeviceSurfaceFormatsKHR(m_physical_device, m_surface, &avail_count, avail_format.data());
+
+        // First check if only one format, VK_FORMAT_UNDEFINED, is available, which would imply that any format is available
+        if (avail_count == 1)
+        {
+            if (avail_format[0].format == VK_FORMAT_UNDEFINED)
+            {
+                VkSurfaceFormatKHR ret;
+                ret.format = request_surface_image_format[0];
+                ret.colorSpace = request_surface_color_space;
+                m_surface_format = ret;
+            }
+            else
+            {
+                // No point in searching another format
+                m_surface_format = avail_format[0];
+            }
+        }
+        else
+        {
+            for (usize request_i = 0; request_i < request_surface_image_format.size(); request_i++)
+            {
+                for (uint32_t avail_i = 0; avail_i < avail_count; avail_i++)
+                {
+                    if (avail_format[avail_i].format == request_surface_image_format[request_i] && avail_format[avail_i].colorSpace == request_surface_color_space)
+                    {
+                        m_surface_format = avail_format[avail_i];
+                    }
+                }
+            }
+            m_surface_format = avail_format[0];
+        }
+    }
+
+    void setup_vulkan_window_select_presentation_mode()
+    {
+#ifdef APP_USE_UNLIMITED_FRAME_RATE
+        constexpr std::array present_modes = {
+            VK_PRESENT_MODE_MAILBOX_KHR,
+            VK_PRESENT_MODE_IMMEDIATE_KHR,
+            VK_PRESENT_MODE_FIFO_KHR};
+#else
+        constexpr std::array present_modes = {
+            VK_PRESENT_MODE_FIFO_KHR};
+#endif
+
+        static_assert(
+            std::ranges::find(present_modes, VK_PRESENT_MODE_FIFO_KHR) != present_modes.end(),
+            "VK_PRESENT_MODE_FIFO_KHR must be present in present_modes");
+
+        u32 num_supported = 0;
+        vkGetPhysicalDeviceSurfacePresentModesKHR(m_physical_device, m_surface, &num_supported, nullptr);
+        std::vector<VkPresentModeKHR> supported_modes;
+        supported_modes.resize(static_cast<usize>(num_supported));
+        vkGetPhysicalDeviceSurfacePresentModesKHR(m_physical_device, m_surface, &num_supported, supported_modes.data());
+        for (const auto mode : present_modes)
+        {
+            if (std::ranges::find(supported_modes, mode) != supported_modes.end())
+            {
+                m_present_mode = mode;
+                return;
+            }
+        }
+        m_present_mode = VK_PRESENT_MODE_FIFO_KHR;
+    }
+
 private:
-    void setup_sdl_()
+    void
+    setup_sdl_()
     {
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) PANIC_MSG("Error: SDL_Init(): %s", SDL_GetError());
 
@@ -605,28 +685,8 @@ int main()
                 fprintf(stderr, "Error no WSI support on physical device 0\n");
                 exit(-1);
             }
-
-            // Select Surface Format
-            const VkFormat requestSurfaceImageFormat[] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8_UNORM, VK_FORMAT_R8G8B8_UNORM};
-            const VkColorSpaceKHR requestSurfaceColorSpace = VK_COLORSPACE_SRGB_NONLINEAR_KHR;
-            ctx.m_surface_format = ImGui_ImplVulkanH_SelectSurfaceFormat(ctx.m_physical_device, ctx.m_surface, requestSurfaceImageFormat, static_cast<usize>(IM_ARRAYSIZE(requestSurfaceImageFormat)), requestSurfaceColorSpace);
-
-            // Select Present Mode
-#ifdef APP_USE_UNLIMITED_FRAME_RATE
-            constexpr std::array<VkPresentModeKHR, 3> present_modes = {
-                VK_PRESENT_MODE_MAILBOX_KHR,
-                VK_PRESENT_MODE_IMMEDIATE_KHR,
-                VK_PRESENT_MODE_FIFO_KHR};
-#else
-            constexpr std::array<VkPresentModeKHR, 1> present_modes = {
-                VK_PRESENT_MODE_FIFO_KHR};
-#endif
-            ctx.m_present_mode = ImGui_ImplVulkanH_SelectPresentMode(
-                ctx.m_physical_device,
-                ctx.m_surface,
-                present_modes.data(),
-                static_cast<int>(present_modes.size()));
-            // printf("[vulkan] Selected PresentMode = %d\n", wd->PresentMode);
+            ctx.setup_vulkan_window_select_surface_format();
+            ctx.setup_vulkan_window_select_presentation_mode();
 
             // Create SwapChain, RenderPass, Framebuffer, etc.
             ctx.m_main_window_data->Surface = ctx.m_surface;
