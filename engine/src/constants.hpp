@@ -1,3 +1,5 @@
+// engine/erc/constants.hpp
+#pragma once
 #include "types.hpp"
 
 namespace DSEngine::Constants

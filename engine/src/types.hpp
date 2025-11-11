@@ -1,4 +1,5 @@
 // engine/src/types.hpp
+#pragma once
 #include <cstddef>
 #include <cstdint>
 
