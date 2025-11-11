@@ -170,7 +170,10 @@ struct EngineContext
 
     std::vector<const char *> m_extensions{};
 
+    f32 m_main_scale = -1.0f;
+
     SDL_Window *m_window = nullptr;
+    ImVec4 m_clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
     inline void print_window_info() const noexcept { SDL::print_window_info(m_window); }
     inline void print_extensions() const noexcept
@@ -196,135 +199,76 @@ struct EngineContext
     {
         setup_sdl_();
         setup_vulkan_();
-    }
-
-    void setup_vulkan_window()
-    {
-        if (SDL_Vulkan_CreateSurface(m_window, m_instance, m_allocator, &m_surface) == 0)
-        {
-            PANIC("Failed to create Vulkan surface");
-        }
-
-        // Create Framebuffers
-        int window_width, window_height;
-        SDL_GetWindowSize(m_window, &window_width, &window_height);
-        m_main_window_data.Surface = m_surface;
-
-        // Check for WSI support
-        VkBool32 res;
-        vkGetPhysicalDeviceSurfaceSupportKHR(m_physical_device, m_queue_family, m_surface, &res);
-        if (res != VK_TRUE) PANIC("Error no WSI support on physical device 0");
-
-        setup_vulkan_window_select_surface_format();
-        setup_vulkan_window_select_presentation_mode();
-
-        // Create SwapChain, RenderPass, Framebuffer, etc.
-        m_main_window_data.Surface = m_surface;
-        m_main_window_data.SurfaceFormat = m_surface_format;
-        m_main_window_data.PresentMode = m_present_mode;
-        DS_ASSERT(m_min_image_count >= 2);
-        ImGui_ImplVulkanH_CreateOrResizeWindow(
-            m_instance,
-            m_physical_device,
-            m_device,
-            &m_main_window_data,
-            m_queue_family,
-            m_allocator,
-            window_width,
-            window_height,
-            m_min_image_count,
-            0);
-        SDL_SetWindowPosition(m_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
-        SDL_ShowWindow(m_window);
-    }
-
-    void setup_vulkan_window_select_surface_format()
-    {
-        constexpr std::array<VkFormat, 4> request_surface_image_format = {
-            VK_FORMAT_B8G8R8A8_UNORM,
-            VK_FORMAT_R8G8B8A8_UNORM,
-            VK_FORMAT_B8G8R8_UNORM,
-            VK_FORMAT_R8G8B8_UNORM};
-        const VkColorSpaceKHR request_surface_color_space = VK_COLORSPACE_SRGB_NONLINEAR_KHR;
-        u32 avail_count{};
-        vkGetPhysicalDeviceSurfaceFormatsKHR(m_physical_device, m_surface, &avail_count, nullptr);
-        std::vector<VkSurfaceFormatKHR> avail_format(avail_count);
-        vkGetPhysicalDeviceSurfaceFormatsKHR(m_physical_device, m_surface, &avail_count, avail_format.data());
-
-        // First check if only one format, VK_FORMAT_UNDEFINED, is available, which would imply that any format is available
-        if (avail_count == 1)
-        {
-            if (avail_format[0].format == VK_FORMAT_UNDEFINED)
-            {
-                VkSurfaceFormatKHR ret;
-                ret.format = request_surface_image_format[0];
-                ret.colorSpace = request_surface_color_space;
-                m_surface_format = ret;
-            }
-            else
-            {
-                // No point in searching another format
-                m_surface_format = avail_format[0];
-            }
-        }
-        else
-        {
-            for (usize request_i = 0; request_i < request_surface_image_format.size(); request_i++)
-            {
-                for (uint32_t avail_i = 0; avail_i < avail_count; avail_i++)
-                {
-                    if (avail_format[avail_i].format == request_surface_image_format[request_i] && avail_format[avail_i].colorSpace == request_surface_color_space)
-                    {
-                        m_surface_format = avail_format[avail_i];
-                    }
-                }
-            }
-            m_surface_format = avail_format[0];
-        }
-    }
-
-    void setup_vulkan_window_select_presentation_mode()
-    {
-#ifdef APP_USE_UNLIMITED_FRAME_RATE
-        constexpr std::array present_modes = {
-            VK_PRESENT_MODE_MAILBOX_KHR,
-            VK_PRESENT_MODE_IMMEDIATE_KHR,
-            VK_PRESENT_MODE_FIFO_KHR};
-#else
-        constexpr std::array present_modes = {
-            VK_PRESENT_MODE_FIFO_KHR};
-#endif
-
-        static_assert(
-            std::ranges::find(present_modes, VK_PRESENT_MODE_FIFO_KHR) != present_modes.end(),
-            "VK_PRESENT_MODE_FIFO_KHR must be present in present_modes");
-
-        u32 num_supported = 0;
-        vkGetPhysicalDeviceSurfacePresentModesKHR(m_physical_device, m_surface, &num_supported, nullptr);
-        std::vector<VkPresentModeKHR> supported_modes;
-        supported_modes.resize(static_cast<usize>(num_supported));
-        vkGetPhysicalDeviceSurfacePresentModesKHR(m_physical_device, m_surface, &num_supported, supported_modes.data());
-        for (const auto mode : present_modes)
-        {
-            if (std::ranges::find(supported_modes, mode) != supported_modes.end())
-            {
-                m_present_mode = mode;
-                return;
-            }
-        }
-        m_present_mode = VK_PRESENT_MODE_FIFO_KHR;
+        setup_vulkan_window_();
+        setup_imgui_();
     }
 
 private:
-    void
-    setup_sdl_()
+    void setup_imgui_()
+    {
+        // Setup Dear ImGui context
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO &io = ImGui::GetIO();
+        (void)io;
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;  // Enable Gamepad Controls
+
+        // Setup Dear ImGui style
+        ImGui::StyleColorsDark();
+        // ImGui::StyleColorsLight();
+
+        // Setup scaling
+        ImGuiStyle &style = ImGui::GetStyle();
+        style.ScaleAllSizes(m_main_scale); // Bake a fixed style scale. (until we have a solution for dynamic style scaling, changing this requires resetting Style + calling this again)
+        style.FontScaleDpi = m_main_scale; // Set initial font scale. (using io.ConfigDpiScaleFonts=true makes this unnecessary. We leave both here for documentation purpose)
+
+        // Setup Platform/Renderer backends
+        ImGui_ImplSDL3_InitForVulkan(m_window);
+        ImGui_ImplVulkan_InitInfo init_info = {};
+        // init_info.ApiVersion = VK_API_VERSION_1_3;              // Pass in your value of VkApplicationInfo::apiVersion, otherwise will default to header version.
+        init_info.Instance = m_instance;
+        init_info.PhysicalDevice = m_physical_device;
+        init_info.Device = m_device;
+        init_info.QueueFamily = m_queue_family;
+        init_info.Queue = m_queue;
+        init_info.PipelineCache = m_pipeline_cache;
+        init_info.DescriptorPool = m_description_pool;
+        init_info.MinImageCount = m_min_image_count;
+        init_info.ImageCount = m_main_window_data.ImageCount;
+        init_info.Allocator = m_allocator;
+        init_info.PipelineInfoMain.RenderPass = m_main_window_data.RenderPass;
+        init_info.PipelineInfoMain.Subpass = 0;
+        init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+        init_info.CheckVkResultFn = vk_check;
+        ImGui_ImplVulkan_Init(&init_info);
+
+        // Load Fonts
+        // - If no fonts are loaded, dear imgui will use the default font. You can also load multiple fonts and use ImGui::PushFont()/PopFont() to select them.
+        // - AddFontFromFileTTF() will return the ImFont* so you can store it if you need to select the font among multiple.
+        // - If the file cannot be loaded, the function will return a nullptr. Please handle those errors in your application (e.g. use an assertion, or display an error and quit).
+        // - Use '#define IMGUI_ENABLE_FREETYPE' in your imconfig file to use Freetype for higher quality font rendering.
+        // - Read 'docs/FONTS.md' for more instructions and details. If you like the default font but want it to scale better, consider using the 'ProggyVector' from the same author!
+        // - Remember that in C/C++ if you want to include a backslash \ in a string literal you need to write a double backslash \\ !
+        // style.FontSizeBase = 20.0f;
+        // io.Fonts->AddFontDefault();
+        // io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\segoeui.ttf");
+        // io.Fonts->AddFontFromFileTTF("../../misc/fonts/DroidSans.ttf");
+        // io.Fonts->AddFontFromFileTTF("../../misc/fonts/Roboto-Medium.ttf");
+        // io.Fonts->AddFontFromFileTTF("../../misc/fonts/Cousine-Regular.ttf");
+        // ImFont* font = io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\ArialUni.ttf");
+        // DS_ASSERT(font != nullptr);
+    }
+
+    void setup_sdl_()
     {
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) PANIC("Error: SDL_Init(): %s", SDL_GetError());
 
         // Create window with Vulkan graphics context
-        f32 main_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
+        m_main_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
         SDL_WindowFlags window_flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-        SDL_Window *window = SDL_CreateWindow("DSEngine", (int)(1280 * main_scale), (int)(800 * main_scale), window_flags);
+        // TODO: Make those variables
+        SDL_Window *window = SDL_CreateWindow("DSEngine", (int)(1280 * m_main_scale), (int)(800 * m_main_scale), window_flags);
         m_window = window;
         if (!m_window) PANIC("Error: SDL_CreateWindow(): %s\n", SDL_GetError());
     }
@@ -446,6 +390,124 @@ private:
         pool_info.poolSizeCount = static_cast<u32>(IM_ARRAYSIZE(pool_sizes));
         pool_info.pPoolSizes = pool_sizes;
         vk_check(vkCreateDescriptorPool(m_device, &pool_info, m_allocator, &m_description_pool));
+    }
+
+    void setup_vulkan_window_()
+    {
+        if (SDL_Vulkan_CreateSurface(m_window, m_instance, m_allocator, &m_surface) == 0)
+        {
+            PANIC("Failed to create Vulkan surface");
+        }
+
+        // Create Framebuffers
+        int window_width, window_height;
+        SDL_GetWindowSize(m_window, &window_width, &window_height);
+        m_main_window_data.Surface = m_surface;
+
+        // Check for WSI support
+        VkBool32 res;
+        vkGetPhysicalDeviceSurfaceSupportKHR(m_physical_device, m_queue_family, m_surface, &res);
+        if (res != VK_TRUE) PANIC("Error no WSI support on physical device 0");
+
+        setup_vulkan_window_select_surface_format_();
+        setup_vulkan_window_select_presentation_mode_();
+
+        // Create SwapChain, RenderPass, Framebuffer, etc.
+        m_main_window_data.Surface = m_surface;
+        m_main_window_data.SurfaceFormat = m_surface_format;
+        m_main_window_data.PresentMode = m_present_mode;
+        DS_ASSERT(m_min_image_count >= 2);
+        ImGui_ImplVulkanH_CreateOrResizeWindow(
+            m_instance,
+            m_physical_device,
+            m_device,
+            &m_main_window_data,
+            m_queue_family,
+            m_allocator,
+            window_width,
+            window_height,
+            m_min_image_count,
+            0);
+        SDL_SetWindowPosition(m_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+        SDL_ShowWindow(m_window);
+    }
+
+    void setup_vulkan_window_select_surface_format_()
+    {
+        constexpr std::array<VkFormat, 4> request_surface_image_format = {
+            VK_FORMAT_B8G8R8A8_UNORM,
+            VK_FORMAT_R8G8B8A8_UNORM,
+            VK_FORMAT_B8G8R8_UNORM,
+            VK_FORMAT_R8G8B8_UNORM};
+        const VkColorSpaceKHR request_surface_color_space = VK_COLORSPACE_SRGB_NONLINEAR_KHR;
+        u32 avail_count{};
+        vkGetPhysicalDeviceSurfaceFormatsKHR(m_physical_device, m_surface, &avail_count, nullptr);
+        std::vector<VkSurfaceFormatKHR> avail_format(avail_count);
+        vkGetPhysicalDeviceSurfaceFormatsKHR(m_physical_device, m_surface, &avail_count, avail_format.data());
+
+        // First check if only one format, VK_FORMAT_UNDEFINED, is available, which would imply that any format is available
+        if (avail_count == 1)
+        {
+            if (avail_format[0].format == VK_FORMAT_UNDEFINED)
+            {
+                VkSurfaceFormatKHR ret;
+                ret.format = request_surface_image_format[0];
+                ret.colorSpace = request_surface_color_space;
+                m_surface_format = ret;
+            }
+            else
+            {
+                // No point in searching another format
+                m_surface_format = avail_format[0];
+            }
+        }
+        else
+        {
+            for (const auto &req_format : request_surface_image_format)
+            {
+                for (const auto &avail : avail_format)
+                {
+                    if (avail.format == req_format && avail.colorSpace == request_surface_color_space)
+                    {
+                        m_surface_format = avail;
+                        return;
+                    }
+                }
+            }
+            m_surface_format = avail_format[0];
+        }
+    }
+
+    void setup_vulkan_window_select_presentation_mode_()
+    {
+#ifdef APP_USE_UNLIMITED_FRAME_RATE
+        constexpr std::array present_modes = {
+            VK_PRESENT_MODE_MAILBOX_KHR,
+            VK_PRESENT_MODE_IMMEDIATE_KHR,
+            VK_PRESENT_MODE_FIFO_KHR};
+#else
+        constexpr std::array present_modes = {
+            VK_PRESENT_MODE_FIFO_KHR};
+#endif
+
+        static_assert(
+            std::ranges::find(present_modes, VK_PRESENT_MODE_FIFO_KHR) != present_modes.end(),
+            "VK_PRESENT_MODE_FIFO_KHR must be present in present_modes");
+
+        u32 num_supported = 0;
+        vkGetPhysicalDeviceSurfacePresentModesKHR(m_physical_device, m_surface, &num_supported, nullptr);
+        std::vector<VkPresentModeKHR> supported_modes;
+        supported_modes.resize(static_cast<usize>(num_supported));
+        vkGetPhysicalDeviceSurfacePresentModesKHR(m_physical_device, m_surface, &num_supported, supported_modes.data());
+        for (const auto mode : present_modes)
+        {
+            if (std::ranges::find(supported_modes, mode) != supported_modes.end())
+            {
+                m_present_mode = mode;
+                return;
+            }
+        }
+        m_present_mode = VK_PRESENT_MODE_FIFO_KHR;
     }
 };
 
@@ -684,23 +746,9 @@ int main()
     EngineContext ctx{};
     ctx.setup();
 
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) PANIC("Error: SDL_Init(): %s", SDL_GetError());
-
     SDL_Window *window = ctx.m_window;
     f32 main_scale = ctx.get_display_content_scale();
     SDL_WindowFlags window_flags = ctx.get_sdl_window_flags();
-
-    // Setup Vulkan
-    g_Allocator = ctx.m_allocator;
-    g_Instance = ctx.m_instance;
-    g_PhysicalDevice = ctx.m_physical_device;
-    g_Device = ctx.m_device;
-    g_QueueFamily = ctx.m_queue_family;
-    g_Queue = ctx.m_queue;
-    g_PipelineCache = ctx.m_pipeline_cache;
-    g_DescriptorPool = ctx.m_description_pool;
-
-    ctx.setup_vulkan_window();
 
     ImGui_ImplVulkanH_Window *wd = &ctx.m_main_window_data;
     g_Allocator = ctx.m_allocator;
@@ -712,69 +760,15 @@ int main()
     g_PipelineCache = ctx.m_pipeline_cache;
     g_DescriptorPool = ctx.m_description_pool;
 
+    // Our state
+    bool show_demo_window = true;
+    bool show_another_window = false;
+
     /*
     ###################
     REFACTOR CHECKPOINT
     ###################
     */
-
-    // Setup Dear ImGui context
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO &io = ImGui::GetIO();
-    (void)io;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;  // Enable Gamepad Controls
-
-    // Setup Dear ImGui style
-    ImGui::StyleColorsDark();
-    // ImGui::StyleColorsLight();
-
-    // Setup scaling
-    ImGuiStyle &style = ImGui::GetStyle();
-    style.ScaleAllSizes(main_scale); // Bake a fixed style scale. (until we have a solution for dynamic style scaling, changing this requires resetting Style + calling this again)
-    style.FontScaleDpi = main_scale; // Set initial font scale. (using io.ConfigDpiScaleFonts=true makes this unnecessary. We leave both here for documentation purpose)
-
-    // Setup Platform/Renderer backends
-    ImGui_ImplSDL3_InitForVulkan(window);
-    ImGui_ImplVulkan_InitInfo init_info = {};
-    // init_info.ApiVersion = VK_API_VERSION_1_3;              // Pass in your value of VkApplicationInfo::apiVersion, otherwise will default to header version.
-    init_info.Instance = g_Instance;
-    init_info.PhysicalDevice = g_PhysicalDevice;
-    init_info.Device = g_Device;
-    init_info.QueueFamily = g_QueueFamily;
-    init_info.Queue = g_Queue;
-    init_info.PipelineCache = g_PipelineCache;
-    init_info.DescriptorPool = g_DescriptorPool;
-    init_info.MinImageCount = g_MinImageCount;
-    init_info.ImageCount = wd->ImageCount;
-    init_info.Allocator = g_Allocator;
-    init_info.PipelineInfoMain.RenderPass = wd->RenderPass;
-    init_info.PipelineInfoMain.Subpass = 0;
-    init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-    init_info.CheckVkResultFn = vk_check;
-    ImGui_ImplVulkan_Init(&init_info);
-
-    // Load Fonts
-    // - If no fonts are loaded, dear imgui will use the default font. You can also load multiple fonts and use ImGui::PushFont()/PopFont() to select them.
-    // - AddFontFromFileTTF() will return the ImFont* so you can store it if you need to select the font among multiple.
-    // - If the file cannot be loaded, the function will return a nullptr. Please handle those errors in your application (e.g. use an assertion, or display an error and quit).
-    // - Use '#define IMGUI_ENABLE_FREETYPE' in your imconfig file to use Freetype for higher quality font rendering.
-    // - Read 'docs/FONTS.md' for more instructions and details. If you like the default font but want it to scale better, consider using the 'ProggyVector' from the same author!
-    // - Remember that in C/C++ if you want to include a backslash \ in a string literal you need to write a double backslash \\ !
-    // style.FontSizeBase = 20.0f;
-    // io.Fonts->AddFontDefault();
-    // io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\segoeui.ttf");
-    // io.Fonts->AddFontFromFileTTF("../../misc/fonts/DroidSans.ttf");
-    // io.Fonts->AddFontFromFileTTF("../../misc/fonts/Roboto-Medium.ttf");
-    // io.Fonts->AddFontFromFileTTF("../../misc/fonts/Cousine-Regular.ttf");
-    // ImFont* font = io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\ArialUni.ttf");
-    // DS_ASSERT(font != nullptr);
-
-    // Our state
-    bool show_demo_window = true;
-    bool show_another_window = false;
-    ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
     // Main loop
     bool done = false;
@@ -836,15 +830,15 @@ int main()
             ImGui::Checkbox("Demo Window", &show_demo_window); // Edit bools storing our window open/close state
             ImGui::Checkbox("Another Window", &show_another_window);
 
-            ImGui::SliderFloat("float", &f, 0.0f, 1.0f);           // Edit 1 float using a slider from 0.0f to 1.0f
-            ImGui::ColorEdit3("clear color", (f32 *)&clear_color); // Edit 3 floats representing a color
+            ImGui::SliderFloat("float", &f, 0.0f, 1.0f);                 // Edit 1 float using a slider from 0.0f to 1.0f
+            ImGui::ColorEdit3("clear color", (f32 *)&ctx.m_clear_color); // Edit 3 floats representing a color
 
             // Buttons return true when clicked (most widgets return true when edited/activated)
             if (ImGui::Button("Button")) counter++;
             ImGui::SameLine();
             ImGui::Text("counter = %d", counter);
 
-            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
             ImGui::End();
         }
 
@@ -864,10 +858,10 @@ int main()
         const bool is_minimized = (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f);
         if (!is_minimized)
         {
-            wd->ClearValue.color.float32[0] = clear_color.x * clear_color.w;
-            wd->ClearValue.color.float32[1] = clear_color.y * clear_color.w;
-            wd->ClearValue.color.float32[2] = clear_color.z * clear_color.w;
-            wd->ClearValue.color.float32[3] = clear_color.w;
+            wd->ClearValue.color.float32[0] = ctx.m_clear_color.x * ctx.m_clear_color.w;
+            wd->ClearValue.color.float32[1] = ctx.m_clear_color.y * ctx.m_clear_color.w;
+            wd->ClearValue.color.float32[2] = ctx.m_clear_color.z * ctx.m_clear_color.w;
+            wd->ClearValue.color.float32[3] = ctx.m_clear_color.w;
             FrameRender(wd, draw_data);
             FramePresent(wd);
         }
