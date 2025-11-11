@@ -1,6 +1,7 @@
 // engine/src/engine.hpp
 #pragma once
 
+#include <print>
 #include <vector>
 
 #include "imgui.h"
@@ -13,8 +14,8 @@
 
 #include "constants.hpp"
 #include "types.hpp"
+#include "util.hpp"
 
-// #define APP_USE_UNLIMITED_FRAME_RATE
 #ifdef APP_USE_VULKAN_DEBUG_REPORT
 static VkDebugReportCallbackEXT g_DebugReport = VK_NULL_HANDLE;
 #endif
@@ -59,6 +60,10 @@ struct EngineContext
     ImGui_ImplVulkanH_Window m_main_window_data; // TODO: Inline this and remove dep on imgui structs
     u32 m_min_image_count = 2;
     bool m_rebuild_swapchain = false;
+
+    std::vector<const char *> m_extensions{};
+
+    SDL_Window *m_window = nullptr;
 };
 
 // clang-format off
@@ -333,34 +338,113 @@ static void FramePresent(ImGui_ImplVulkanH_Window *wd)
     wd->SemaphoreIndex = (wd->SemaphoreIndex + 1) % wd->SemaphoreCount; // Now we can use the next set of semaphores
 }
 
+namespace SDL
+{
+inline void print_window_info(SDL_Window *window)
+{
+    if (!window)
+    {
+        std::print(stderr, "Window pointer is null\n");
+        return;
+    }
+
+    const char *title = SDL_GetWindowTitle(window);
+
+    int w = 0, h = 0;
+    SDL_GetWindowSize(window, &w, &h);
+
+    SDL_DisplayID display_id = SDL_GetDisplayForWindow(window);
+    float scale = SDL_GetDisplayContentScale(display_id);
+
+    const SDL_WindowFlags flags = SDL_GetWindowFlags(window);
+
+    auto yesno = [](bool v)
+    { return v ? "yes" : "no"; };
+
+    std::print(stderr,
+        "Window Info:\n"
+        "  Title: {}\n"
+        "  Size: {}x{}\n"
+        "  Display ID: {}\n"
+        "  Content Scale: {}\n"
+        "  Flags: 0x{:08X}\n"
+        "    - {:<15} {}\n"
+        "    - {:<15} {}\n"
+        "    - {:<15} {}\n"
+        "    - {:<15} {}\n"
+        "    - {:<15} {}\n"
+        "    - {:<15} {}\n"
+        "    - {:<15} {}\n"
+        "    - {:<15} {}\n"
+        "    - {:<15} {}\n"
+        "    - {:<15} {}\n"
+        "  Pointer: {}\n",
+        title ? title : "(null)",
+        w, h,
+        static_cast<unsigned int>(display_id),
+        scale,
+        static_cast<unsigned int>(flags),
+        "Fullscreen:", yesno(flags & SDL_WINDOW_FULLSCREEN),
+        "Hidden:", yesno(flags & SDL_WINDOW_HIDDEN),
+        "Borderless:", yesno(flags & SDL_WINDOW_BORDERLESS),
+        "Resizable:", yesno(flags & SDL_WINDOW_RESIZABLE),
+        "Minimized:", yesno(flags & SDL_WINDOW_MINIMIZED),
+        "Maximized:", yesno(flags & SDL_WINDOW_MAXIMIZED),
+        "High DPI:", yesno(flags & SDL_WINDOW_HIGH_PIXEL_DENSITY),
+        "Vulkan:", yesno(flags & SDL_WINDOW_VULKAN),
+        "Metal:", yesno(flags & SDL_WINDOW_METAL),
+        "OpenGL:", yesno(flags & SDL_WINDOW_OPENGL),
+        static_cast<const void *>(window));
+}
+} // namespace SDL
+
+void print_vk_extensions(std::vector<const char *> extensions)
+{
+    if (extensions.empty())
+    {
+        std::println("No Vulkan extensions detected!");
+    }
+    else
+    {
+        std::println("There are {} Vulkan extensions:", extensions.size());
+        for (usize i = 0; i < extensions.size(); ++i)
+        {
+            std::println(" [{:>2}] {}", i, extensions[i]);
+        }
+    }
+}
+
 // Main code
 int main()
 {
-    // Setup SDL
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
-    {
-        printf("Error: SDL_Init(): %s\n", SDL_GetError());
-        return 1;
-    }
+    EngineContext ctx{};
+
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) PANIC_MSG("Error: SDL_Init(): %s", SDL_GetError());
 
     // Create window with Vulkan graphics context
     f32 main_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
     SDL_WindowFlags window_flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-    SDL_Window *window = SDL_CreateWindow("Dear ImGui SDL3+Vulkan example", (int)(1280 * main_scale), (int)(800 * main_scale), window_flags);
-    if (window == nullptr)
+    SDL_Window *window = SDL_CreateWindow("DSEngine", (int)(1280 * main_scale), (int)(800 * main_scale), window_flags);
+    ctx.m_window = window;
+    if (ctx.m_window == nullptr)
     {
         printf("Error: SDL_CreateWindow(): %s\n", SDL_GetError());
         return 1;
     }
+    DSEngine::SDL::print_window_info(ctx.m_window);
 
-    std::vector<const char *> extensions;
-    {
+    { // Vulkan Setup
+        // "VK_KHR_surface"
+        // "VK_EXT_metal_surface"
+        // "VK_KHR_portability_enumeration"
         u32 sdl_extensions_count = 0;
         const char *const *sdl_extensions = SDL_Vulkan_GetInstanceExtensions(&sdl_extensions_count);
-        for (u32 n = 0; n < sdl_extensions_count; n++)
-            extensions.push_back(sdl_extensions[n]);
+        ctx.m_extensions.insert(ctx.m_extensions.end(), sdl_extensions, sdl_extensions + sdl_extensions_count);
+        print_vk_extensions(ctx.m_extensions);
+
+        SetupVulkan(ctx.m_extensions);
     }
-    SetupVulkan(extensions);
+    PANIC();
 
     // Create Window Surface
     VkSurfaceKHR surface;
