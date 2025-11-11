@@ -37,7 +37,7 @@ inline void print_window_info(SDL_Window *window)
 
     const char *title = SDL_GetWindowTitle(window);
     int w = 0, h = 0;
-    SDL_GetWindowSize(window, &w, &h);
+    SDL_GetWindowSizeInPixels(window, &w, &h);
     SDL_DisplayID display_id = SDL_GetDisplayForWindow(window);
     float scale = SDL_GetDisplayContentScale(display_id);
     const SDL_WindowFlags flags = SDL_GetWindowFlags(window);
@@ -116,22 +116,20 @@ static bool IsExtensionAvailable(const std::vector<VkExtensionProperties> &prope
     return false;
 }
 
-// TODO: Replace those, either with my own structures or by inlining those
 struct FrameContext
 {
-    VkCommandPool CommandPool;
-    VkCommandBuffer CommandBuffer;
-    VkFence Fence;
-    VkImage Backbuffer;
-    VkImageView BackbufferView;
-    VkFramebuffer Framebuffer;
+    VkCommandPool command_pool;
+    VkCommandBuffer command_buffer;
+    VkFence fence;
+    VkImage backbuffer;
+    VkImageView backbuffer_view;
+    VkFramebuffer framebuffer;
 };
 
-// TODO: Replace those, either with my own structures or by inlining those
 struct FrameSemaphores
 {
-    VkSemaphore ImageAcquiredSemaphore;
-    VkSemaphore RenderCompleteSemaphore;
+    VkSemaphore image_acquired;
+    VkSemaphore render_complete;
 };
 
 struct EngineContext
@@ -145,23 +143,21 @@ struct EngineContext
     VkPipelineCache m_pipeline_cache = VK_NULL_HANDLE;
     VkDescriptorPool m_description_pool = VK_NULL_HANDLE;
 
-    ImGui_ImplVulkanH_Window m_main_window_data{}; // TODO: Inline this and remove dep on imgui structs
-
-    int m_width;
-    int m_height;
+    int m_width = 0;
+    int m_height = 0;
     VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;
     VkSurfaceKHR m_surface = VK_NULL_HANDLE;
     VkSurfaceFormatKHR m_surface_format{};
     VkPresentModeKHR m_present_mode = VkPresentModeKHR::VK_PRESENT_MODE_MAX_ENUM_KHR;
     VkRenderPass m_render_pass = VK_NULL_HANDLE;
     VkPipeline m_pipeline = VK_NULL_HANDLE;
-    bool m_use_dynamic_rendering;
-    bool m_clear_enabled;
+    bool m_use_dynamic_rendering = false;
+    bool m_clear_enabled = true;
     VkClearValue m_clear_value{};
-    u32 m_frame_index;     // Current frame being rendered to (0 <= FrameIndex < FrameInFlightCount)
-    u32 m_image_count;     // Number of simultaneous in-flight frames (returned by vkGetSwapchainImagesKHR, usually derived from min_image_count)
-    u32 m_semaphore_count; // Number of simultaneous in-flight frames + 1, to be able to use it in vkAcquireNextImageKHR
-    u32 m_semaphore_index; // Current set of swapchain wait semaphores we're using (needs to be distinct from per frame data)
+    u32 m_frame_index = 0;
+    u32 m_image_count = 0;
+    u32 m_semaphore_count = 0;
+    u32 m_semaphore_index = 0;
     std::vector<FrameContext> m_frames;
     std::vector<FrameSemaphores> m_frame_semaphores;
 
@@ -213,57 +209,139 @@ struct EngineContext
 
     void recreate_window()
     {
+        vk_check(vkDeviceWaitIdle(m_device));
+
+        ImGui_ImplVulkanH_Window tmp{};
+        tmp.Surface = m_surface;
+        tmp.SurfaceFormat = m_surface_format;
+        tmp.PresentMode = m_present_mode;
+        tmp.Width = m_window_width;
+        tmp.Height = m_window_height;
+        tmp.Swapchain = m_swapchain;
+        tmp.RenderPass = m_render_pass;
+        tmp.UseDynamicRendering = m_use_dynamic_rendering;
+        tmp.ClearEnable = m_clear_enabled;
+        tmp.ClearValue = m_clear_value;
+        tmp.ImageCount = m_image_count;
+        tmp.SemaphoreCount = m_semaphore_count;
+        tmp.FrameIndex = m_frame_index;
+
+        for (const auto &f : m_frames)
+        {
+            ImGui_ImplVulkanH_Frame fr{};
+            fr.CommandPool = f.command_pool;
+            fr.CommandBuffer = f.command_buffer;
+            fr.Fence = f.fence;
+            fr.Backbuffer = f.backbuffer;
+            fr.BackbufferView = f.backbuffer_view;
+            fr.Framebuffer = f.framebuffer;
+            tmp.Frames.push_back(fr);
+        }
+        for (const auto &s : m_frame_semaphores)
+        {
+            ImGui_ImplVulkanH_FrameSemaphores sem{};
+            sem.ImageAcquiredSemaphore = s.image_acquired;
+            sem.RenderCompleteSemaphore = s.render_complete;
+            tmp.FrameSemaphores.push_back(sem);
+        }
+
         ImGui_ImplVulkanH_CreateOrResizeWindow(
             m_instance,
             m_physical_device,
             m_device,
-            &m_main_window_data,
+            &tmp,
             m_queue_family,
             m_allocator,
             m_window_width,
             m_window_height,
             m_min_image_count,
             0);
+
+        // Copy back results from ImGui window into our fields
+        m_width = tmp.Width;
+        m_height = tmp.Height;
+        m_swapchain = tmp.Swapchain;
+        m_render_pass = tmp.RenderPass;
+        m_use_dynamic_rendering = tmp.UseDynamicRendering;
+        m_clear_enabled = tmp.ClearEnable;
+        m_clear_value = tmp.ClearValue;
+        m_image_count = tmp.ImageCount;
+        DS_ASSERT(m_image_count >= m_min_image_count);
+
+        m_semaphore_count = tmp.SemaphoreCount;
+        m_frame_index = tmp.FrameIndex;
+        m_semaphore_index = 0;
+
+        m_frames.clear();
+        m_frames.reserve(static_cast<size_t>(tmp.ImageCount));
+        for (int i = 0; i < tmp.Frames.Size; ++i)
+        {
+            const ImGui_ImplVulkanH_Frame &src = tmp.Frames[i];
+            FrameContext dst{
+                .command_pool = src.CommandPool,
+                .command_buffer = src.CommandBuffer,
+                .fence = src.Fence,
+                .backbuffer = src.Backbuffer,
+                .backbuffer_view = src.BackbufferView,
+                .framebuffer = src.Framebuffer};
+            m_frames.push_back(dst);
+        }
+
+        // Convert ImGui semaphores into our FrameSemaphores vector
+        m_frame_semaphores.clear();
+        m_frame_semaphores.reserve(static_cast<size_t>(tmp.SemaphoreCount));
+        for (int i = 0; i < tmp.FrameSemaphores.Size; ++i)
+        {
+            const ImGui_ImplVulkanH_FrameSemaphores &src = tmp.FrameSemaphores[i];
+            FrameSemaphores s{
+                .image_acquired = src.ImageAcquiredSemaphore,
+                .render_complete = src.RenderCompleteSemaphore};
+            m_frame_semaphores.push_back(s);
+        }
     }
 
     void render_frame()
     {
-        VkSemaphore image_acquired_semaphore = m_main_window_data.FrameSemaphores[m_main_window_data.SemaphoreIndex].ImageAcquiredSemaphore;
-        VkSemaphore render_complete_semaphore = m_main_window_data.FrameSemaphores[m_main_window_data.SemaphoreIndex].RenderCompleteSemaphore;
-        VkResult err = vkAcquireNextImageKHR(m_device, m_main_window_data.Swapchain, UINT64_MAX, image_acquired_semaphore, VK_NULL_HANDLE, &m_main_window_data.FrameIndex);
+        VkSemaphore image_acquired_semaphore = m_frame_semaphores[m_semaphore_index].image_acquired;
+        VkSemaphore render_complete_semaphore = m_frame_semaphores[m_semaphore_index].render_complete;
+        VkResult err = vkAcquireNextImageKHR(m_device, m_swapchain, UINT64_MAX, image_acquired_semaphore, VK_NULL_HANDLE, &m_frame_index);
         if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) m_rebuild_swapchain = true;
         if (err == VK_ERROR_OUT_OF_DATE_KHR) return;
         if (err != VK_SUBOPTIMAL_KHR) vk_check(err);
-        ImGui_ImplVulkanH_Frame *fd = &m_main_window_data.Frames[m_main_window_data.FrameIndex];
+        if (m_frame_index >= m_frames.size())
         {
-            // wait indefinitely instead of periodically checking
-            vk_check(vkWaitForFences(m_device, 1, &fd->Fence, VK_TRUE, UINT64_MAX));
-            vk_check(vkResetFences(m_device, 1, &fd->Fence));
+            m_rebuild_swapchain = true;
+            return;
+        }
+        FrameContext *fd = &m_frames[m_frame_index];
+        {
+            vk_check(vkWaitForFences(m_device, 1, &fd->fence, VK_TRUE, UINT64_MAX));
+            vk_check(vkResetFences(m_device, 1, &fd->fence));
         }
         {
-            vk_check(vkResetCommandPool(m_device, fd->CommandPool, 0));
+            vk_check(vkResetCommandPool(m_device, fd->command_pool, 0));
             VkCommandBufferBeginInfo info = {};
             info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
             info.flags |= VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            vk_check(vkBeginCommandBuffer(fd->CommandBuffer, &info));
+            vk_check(vkBeginCommandBuffer(fd->command_buffer, &info));
         }
         {
             VkRenderPassBeginInfo info = {};
             info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-            info.renderPass = m_main_window_data.RenderPass;
-            info.framebuffer = fd->Framebuffer;
-            info.renderArea.extent.width = m_main_window_data.Width;
-            info.renderArea.extent.height = m_main_window_data.Height;
+            info.renderPass = m_render_pass;
+            info.framebuffer = fd->framebuffer;
+            info.renderArea.extent.width = static_cast<u32>(m_width);
+            info.renderArea.extent.height = static_cast<u32>(m_height);
             info.clearValueCount = 1;
-            info.pClearValues = &m_main_window_data.ClearValue;
-            vkCmdBeginRenderPass(fd->CommandBuffer, &info, VK_SUBPASS_CONTENTS_INLINE);
+            info.pClearValues = &m_clear_value;
+            vkCmdBeginRenderPass(fd->command_buffer, &info, VK_SUBPASS_CONTENTS_INLINE);
         }
 
         // Record dear imgui primitives into command buffer
-        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), fd->CommandBuffer);
+        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), fd->command_buffer);
 
         // Submit command buffer
-        vkCmdEndRenderPass(fd->CommandBuffer);
+        vkCmdEndRenderPass(fd->command_buffer);
         {
             VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
             VkSubmitInfo info = {};
@@ -272,31 +350,31 @@ struct EngineContext
             info.pWaitSemaphores = &image_acquired_semaphore;
             info.pWaitDstStageMask = &wait_stage;
             info.commandBufferCount = 1;
-            info.pCommandBuffers = &fd->CommandBuffer;
+            info.pCommandBuffers = &fd->command_buffer;
             info.signalSemaphoreCount = 1;
             info.pSignalSemaphores = &render_complete_semaphore;
 
-            vk_check(vkEndCommandBuffer(fd->CommandBuffer));
-            vk_check(vkQueueSubmit(m_queue, 1, &info, fd->Fence));
+            vk_check(vkEndCommandBuffer(fd->command_buffer));
+            vk_check(vkQueueSubmit(m_queue, 1, &info, fd->fence));
         }
     }
 
     void present_frame()
     {
         if (m_rebuild_swapchain) return;
-        VkSemaphore render_complete_semaphore = m_main_window_data.FrameSemaphores[m_main_window_data.SemaphoreIndex].RenderCompleteSemaphore;
+        VkSemaphore render_complete_semaphore = m_frame_semaphores[m_semaphore_index].render_complete;
         VkPresentInfoKHR info = {};
         info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
         info.waitSemaphoreCount = 1;
         info.pWaitSemaphores = &render_complete_semaphore;
         info.swapchainCount = 1;
-        info.pSwapchains = &m_main_window_data.Swapchain;
-        info.pImageIndices = &m_main_window_data.FrameIndex;
+        info.pSwapchains = &m_swapchain;
+        info.pImageIndices = &m_frame_index;
         VkResult err = vkQueuePresentKHR(m_queue, &info);
         if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) m_rebuild_swapchain = true;
         if (err == VK_ERROR_OUT_OF_DATE_KHR) return;
         if (err != VK_SUBOPTIMAL_KHR) vk_check(err);
-        m_main_window_data.SemaphoreIndex = (m_main_window_data.SemaphoreIndex + 1) % m_main_window_data.SemaphoreCount;
+        m_semaphore_index = (m_semaphore_index + 1) % m_semaphore_count;
     }
 
     void cleanup()
@@ -306,7 +384,33 @@ struct EngineContext
         ImGui_ImplSDL3_Shutdown();
         ImGui::DestroyContext();
 
-        ImGui_ImplVulkanH_DestroyWindow(m_instance, m_device, &m_main_window_data, m_allocator);
+        vkDeviceWaitIdle(m_device);
+        for (uint32_t i = 0; i < m_image_count; i++)
+        {
+            vkDestroyFence(m_device, m_frames[i].fence, m_allocator);
+            vkFreeCommandBuffers(m_device, m_frames[i].command_pool, 1, &m_frames[i].command_buffer);
+            vkDestroyCommandPool(m_device, m_frames[i].command_pool, m_allocator);
+            m_frames[i].fence = VK_NULL_HANDLE;
+            m_frames[i].command_buffer = VK_NULL_HANDLE;
+            m_frames[i].command_pool = VK_NULL_HANDLE;
+
+            vkDestroyImageView(m_device, m_frames[i].backbuffer_view, m_allocator);
+            vkDestroyFramebuffer(m_device, m_frames[i].framebuffer, m_allocator);
+        }
+        for (uint32_t i = 0; i < m_semaphore_count; i++)
+        {
+            vkDestroySemaphore(m_device, m_frame_semaphores[i].image_acquired, m_allocator);
+            vkDestroySemaphore(m_device, m_frame_semaphores[i].render_complete, m_allocator);
+            m_frame_semaphores[i].image_acquired = VK_NULL_HANDLE;
+            m_frame_semaphores[i].render_complete = VK_NULL_HANDLE;
+        }
+        m_frames.clear();
+        m_frame_semaphores.clear();
+        vkDestroyPipeline(m_device, m_pipeline, m_allocator);
+        vkDestroyRenderPass(m_device, m_render_pass, m_allocator);
+        vkDestroySwapchainKHR(m_device, m_swapchain, m_allocator);
+        vkDestroySurfaceKHR(m_instance, m_surface, m_allocator);
+
         vkDestroyDescriptorPool(m_device, m_description_pool, m_allocator);
 
 #ifdef APP_USE_VULKAN_DEBUG_REPORT
@@ -352,12 +456,19 @@ struct EngineContext
     void recreate_swapchain_if_needed()
     {
         // Resize swap chain?
-        SDL_GetWindowSize(m_window, &m_width, &m_height);
-        if (m_width > 0 && m_height > 0 && (m_rebuild_swapchain || m_main_window_data.Width != m_width || m_main_window_data.Height != m_height))
+        int fd_width{};
+        int fd_height{};
+        SDL_GetWindowSizeInPixels(m_window, &fd_width, &fd_height);
+        const bool size_ok = (fd_width > 0 && fd_height > 0);
+        const bool size_changed = (m_width != fd_width) || (m_height != fd_height);
+        if (size_ok && (m_rebuild_swapchain || size_changed))
         {
             ImGui_ImplVulkan_SetMinImageCount(m_min_image_count);
             recreate_window();
-            m_main_window_data.FrameIndex = 0;
+            m_width = fd_width;
+            m_height = fd_height;
+            recreate_window();
+            m_frame_index = 0;
             m_rebuild_swapchain = false;
         }
     }
@@ -410,9 +521,8 @@ private:
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImGuiIO &io = ImGui::GetIO();
-        (void)io;
-        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
-        io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;  // Enable Gamepad Controls
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
 
         // Setup Dear ImGui style
         ImGui::StyleColorsDark();
@@ -435,9 +545,9 @@ private:
         init_info.PipelineCache = m_pipeline_cache;
         init_info.DescriptorPool = m_description_pool;
         init_info.MinImageCount = m_min_image_count;
-        init_info.ImageCount = m_main_window_data.ImageCount;
+        init_info.ImageCount = m_image_count;
         init_info.Allocator = m_allocator;
-        init_info.PipelineInfoMain.RenderPass = m_main_window_data.RenderPass;
+        init_info.PipelineInfoMain.RenderPass = m_render_pass;
         init_info.PipelineInfoMain.Subpass = 0;
         init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
         init_info.CheckVkResultFn = vk_check;
@@ -483,16 +593,22 @@ private:
         m_extensions.insert(m_extensions.end(), sdl_extensions, sdl_extensions + sdl_extensions_count);
 
         setup_vulkan_instance_();
+        DS_ASSERT(m_instance != VK_NULL_HANDLE);
 
-        m_physical_device = ImGui_ImplVulkanH_SelectPhysicalDevice(m_instance);
+        setup_vulkan_find_physical_device_();
         DS_ASSERT(m_physical_device != VK_NULL_HANDLE);
 
-        m_queue_family = ImGui_ImplVulkanH_SelectQueueFamilyIndex(m_physical_device);
+        setup_vulkan_find_queue_family_();
         DS_ASSERT(m_queue_family != Constants::queue_family_uninitialised);
 
         setup_vulkan_logical_device_();
+        DS_ASSERT(m_queue != VK_NULL_HANDLE);
+        DS_ASSERT(m_device != VK_NULL_HANDLE);
+
         setup_vulkan_descriptor_pool_();
+        DS_ASSERT(m_description_pool != VK_NULL_HANDLE);
     }
+
     void setup_vulkan_instance_()
     {
         VkInstanceCreateInfo create_info = {};
@@ -537,6 +653,48 @@ private:
         debug_report_ci.pUserData = nullptr;
         vk_check(f_vkCreateDebugReportCallbackEXT(m_instance, &debug_report_ci, m_allocator, &g_DebugReport));
 #endif
+    }
+
+    void setup_vulkan_find_physical_device_()
+    {
+        u32 gpu_count;
+        vk_check(vkEnumeratePhysicalDevices(m_instance, &gpu_count, nullptr));
+        DS_ASSERT(gpu_count > 0);
+
+        ImVector<VkPhysicalDevice> gpus;
+        gpus.resize(gpu_count);
+        vk_check(vkEnumeratePhysicalDevices(m_instance, &gpu_count, gpus.Data));
+
+        bool found_discrete = false;
+        for (VkPhysicalDevice &device : gpus)
+        {
+            VkPhysicalDeviceProperties properties;
+            vkGetPhysicalDeviceProperties(device, &properties);
+            if (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
+            {
+                m_physical_device = device;
+                found_discrete = true;
+                break;
+            }
+        }
+        if (!found_discrete and (gpu_count > 0)) m_physical_device = gpus[0];
+    }
+
+    void setup_vulkan_find_queue_family_()
+    {
+        u32 count;
+        vkGetPhysicalDeviceQueueFamilyProperties(m_physical_device, &count, nullptr);
+        ImVector<VkQueueFamilyProperties> queues_properties;
+        queues_properties.resize(static_cast<int>(count));
+        vkGetPhysicalDeviceQueueFamilyProperties(m_physical_device, &count, queues_properties.Data);
+        for (u32 i = 0; i < count; i++)
+        {
+            if (queues_properties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+            {
+                m_queue_family = i;
+                return;
+            }
+        }
     }
 
     void setup_vulkan_logical_device_()
@@ -600,8 +758,7 @@ private:
         }
 
         // Create Framebuffers
-        SDL_GetWindowSize(m_window, &m_window_width, &m_window_height);
-        m_main_window_data.Surface = m_surface;
+        SDL_GetWindowSizeInPixels(m_window, &m_window_width, &m_window_height);
 
         // Check for WSI support
         VkBool32 res;
@@ -612,9 +769,6 @@ private:
         setup_vulkan_window_select_presentation_mode_();
 
         // Create SwapChain, RenderPass, Framebuffer, etc.
-        m_main_window_data.Surface = m_surface;
-        m_main_window_data.SurfaceFormat = m_surface_format;
-        m_main_window_data.PresentMode = m_present_mode;
         DS_ASSERT(m_min_image_count >= 2);
         recreate_window();
         SDL_SetWindowPosition(m_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
@@ -629,15 +783,15 @@ private:
             VK_FORMAT_B8G8R8_UNORM,
             VK_FORMAT_R8G8B8_UNORM};
         const VkColorSpaceKHR request_surface_color_space = VK_COLORSPACE_SRGB_NONLINEAR_KHR;
-        u32 avail_count{};
-        vkGetPhysicalDeviceSurfaceFormatsKHR(m_physical_device, m_surface, &avail_count, nullptr);
-        std::vector<VkSurfaceFormatKHR> avail_format(avail_count);
-        vkGetPhysicalDeviceSurfaceFormatsKHR(m_physical_device, m_surface, &avail_count, avail_format.data());
+        u32 num_availiable{};
+        vkGetPhysicalDeviceSurfaceFormatsKHR(m_physical_device, m_surface, &num_availiable, nullptr);
+        std::vector<VkSurfaceFormatKHR> availiable_formats(num_availiable);
+        vkGetPhysicalDeviceSurfaceFormatsKHR(m_physical_device, m_surface, &num_availiable, availiable_formats.data());
 
         // First check if only one format, VK_FORMAT_UNDEFINED, is available, which would imply that any format is available
-        if (avail_count == 1)
+        if (num_availiable == 1)
         {
-            if (avail_format[0].format == VK_FORMAT_UNDEFINED)
+            if (availiable_formats[0].format == VK_FORMAT_UNDEFINED)
             {
                 VkSurfaceFormatKHR ret;
                 ret.format = request_surface_image_format[0];
@@ -647,14 +801,14 @@ private:
             else
             {
                 // No point in searching another format
-                m_surface_format = avail_format[0];
+                m_surface_format = availiable_formats[0];
             }
         }
         else
         {
             for (const auto &req_format : request_surface_image_format)
             {
-                for (const auto &avail : avail_format)
+                for (const auto &avail : availiable_formats)
                 {
                     if (avail.format == req_format && avail.colorSpace == request_surface_color_space)
                     {
@@ -663,7 +817,7 @@ private:
                     }
                 }
             }
-            m_surface_format = avail_format[0];
+            m_surface_format = availiable_formats[0];
         }
     }
 
@@ -727,10 +881,10 @@ void main()
         const bool is_minimized = (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f);
         if (!is_minimized)
         {
-            ctx.m_main_window_data.ClearValue.color.float32[0] = ctx.m_clear_color.x * ctx.m_clear_color.w;
-            ctx.m_main_window_data.ClearValue.color.float32[1] = ctx.m_clear_color.y * ctx.m_clear_color.w;
-            ctx.m_main_window_data.ClearValue.color.float32[2] = ctx.m_clear_color.z * ctx.m_clear_color.w;
-            ctx.m_main_window_data.ClearValue.color.float32[3] = ctx.m_clear_color.w;
+            ctx.m_clear_value.color.float32[0] = ctx.m_clear_color.x * ctx.m_clear_color.w;
+            ctx.m_clear_value.color.float32[1] = ctx.m_clear_color.y * ctx.m_clear_color.w;
+            ctx.m_clear_value.color.float32[2] = ctx.m_clear_color.z * ctx.m_clear_color.w;
+            ctx.m_clear_value.color.float32[3] = ctx.m_clear_color.w;
             ctx.render_frame();
             ctx.present_frame();
         }
