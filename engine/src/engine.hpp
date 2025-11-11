@@ -145,7 +145,7 @@ struct EngineContext
     VkPipelineCache m_pipeline_cache = VK_NULL_HANDLE;
     VkDescriptorPool m_description_pool = VK_NULL_HANDLE;
 
-    ImGui_ImplVulkanH_Window *m_main_window_data; // TODO: Inline this and remove dep on imgui structs
+    ImGui_ImplVulkanH_Window m_main_window_data{}; // TODO: Inline this and remove dep on imgui structs
 
     int m_width;
     int m_height;
@@ -198,9 +198,48 @@ struct EngineContext
         setup_vulkan_();
     }
 
+    void setup_vulkan_window()
+    {
+        if (SDL_Vulkan_CreateSurface(m_window, m_instance, m_allocator, &m_surface) == 0)
+        {
+            PANIC("Failed to create Vulkan surface");
+        }
+
+        // Create Framebuffers
+        int window_width, window_height;
+        SDL_GetWindowSize(m_window, &window_width, &window_height);
+        m_main_window_data.Surface = m_surface;
+
+        // Check for WSI support
+        VkBool32 res;
+        vkGetPhysicalDeviceSurfaceSupportKHR(m_physical_device, m_queue_family, m_surface, &res);
+        if (res != VK_TRUE) PANIC("Error no WSI support on physical device 0");
+
+        setup_vulkan_window_select_surface_format();
+        setup_vulkan_window_select_presentation_mode();
+
+        // Create SwapChain, RenderPass, Framebuffer, etc.
+        m_main_window_data.Surface = m_surface;
+        m_main_window_data.SurfaceFormat = m_surface_format;
+        m_main_window_data.PresentMode = m_present_mode;
+        DS_ASSERT(m_min_image_count >= 2);
+        ImGui_ImplVulkanH_CreateOrResizeWindow(
+            m_instance,
+            m_physical_device,
+            m_device,
+            &m_main_window_data,
+            m_queue_family,
+            m_allocator,
+            window_width,
+            window_height,
+            m_min_image_count,
+            0);
+        SDL_SetWindowPosition(m_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+        SDL_ShowWindow(m_window);
+    }
+
     void setup_vulkan_window_select_surface_format()
-    { // TODO: Maybe use other name
-        // TODO: Make this private and integrate into the setup_vulkan chain
+    {
         constexpr std::array<VkFormat, 4> request_surface_image_format = {
             VK_FORMAT_B8G8R8A8_UNORM,
             VK_FORMAT_R8G8B8A8_UNORM,
@@ -280,14 +319,14 @@ private:
     void
     setup_sdl_()
     {
-        if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) PANIC_MSG("Error: SDL_Init(): %s", SDL_GetError());
+        if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) PANIC("Error: SDL_Init(): %s", SDL_GetError());
 
         // Create window with Vulkan graphics context
         f32 main_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
         SDL_WindowFlags window_flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY;
         SDL_Window *window = SDL_CreateWindow("DSEngine", (int)(1280 * main_scale), (int)(800 * main_scale), window_flags);
         m_window = window;
-        if (!m_window) PANIC_MSG("Error: SDL_CreateWindow(): %s\n", SDL_GetError());
+        if (!m_window) PANIC("Error: SDL_CreateWindow(): %s\n", SDL_GetError());
     }
 
     void setup_vulkan_()
@@ -645,7 +684,7 @@ int main()
     EngineContext ctx{};
     ctx.setup();
 
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) PANIC_MSG("Error: SDL_Init(): %s", SDL_GetError());
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) PANIC("Error: SDL_Init(): %s", SDL_GetError());
 
     SDL_Window *window = ctx.m_window;
     f32 main_scale = ctx.get_display_content_scale();
@@ -661,54 +700,9 @@ int main()
     g_PipelineCache = ctx.m_pipeline_cache;
     g_DescriptorPool = ctx.m_description_pool;
 
-    // Create Window Surface
-    {
-        if (SDL_Vulkan_CreateSurface(window, ctx.m_instance, ctx.m_allocator, &ctx.m_surface) == 0)
-        {
-            printf("Failed to create Vulkan surface.\n");
-            return 1;
-        }
+    ctx.setup_vulkan_window();
 
-        // Create Framebuffers
-        int window_width, window_height;
-        SDL_GetWindowSize(window, &window_width, &window_height);
-        ctx.m_main_window_data = &g_MainWindowData;
-        // SetupVulkanWindow(wd, surface, window_width, window_height);
-        {
-            ctx.m_main_window_data->Surface = ctx.m_surface;
-
-            // Check for WSI support
-            VkBool32 res;
-            vkGetPhysicalDeviceSurfaceSupportKHR(ctx.m_physical_device, ctx.m_queue_family, ctx.m_surface, &res);
-            if (res != VK_TRUE)
-            {
-                fprintf(stderr, "Error no WSI support on physical device 0\n");
-                exit(-1);
-            }
-            ctx.setup_vulkan_window_select_surface_format();
-            ctx.setup_vulkan_window_select_presentation_mode();
-
-            // Create SwapChain, RenderPass, Framebuffer, etc.
-            ctx.m_main_window_data->Surface = ctx.m_surface;
-            ctx.m_main_window_data->SurfaceFormat = ctx.m_surface_format;
-            ctx.m_main_window_data->PresentMode = ctx.m_present_mode;
-            DS_ASSERT(g_MinImageCount >= 2);
-            ImGui_ImplVulkanH_CreateOrResizeWindow(
-                ctx.m_instance,
-                ctx.m_physical_device,
-                ctx.m_device,
-                ctx.m_main_window_data,
-                ctx.m_queue_family,
-                ctx.m_allocator,
-                window_width,
-                window_height,
-                ctx.m_min_image_count,
-                0);
-        }
-        SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
-        SDL_ShowWindow(window);
-    }
-    ImGui_ImplVulkanH_Window *wd = ctx.m_main_window_data;
+    ImGui_ImplVulkanH_Window *wd = &ctx.m_main_window_data;
     g_Allocator = ctx.m_allocator;
     g_Instance = ctx.m_instance;
     g_PhysicalDevice = ctx.m_physical_device;
@@ -795,13 +789,13 @@ int main()
         while (SDL_PollEvent(&event))
         {
             ImGui_ImplSDL3_ProcessEvent(&event);
-            if (event.type == SDL_EVENT_QUIT)
+            bool quit_event = event.type == SDL_EVENT_QUIT;
+            bool window_closed = event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(window);
+            bool escape_pressed = event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE;
+            if (quit_event || window_closed || escape_pressed)
             {
                 done = true;
-            }
-            if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(window))
-            {
-                done = true;
+                continue;
             }
         }
 

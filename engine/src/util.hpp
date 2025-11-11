@@ -1,42 +1,51 @@
 // engine/src/util.hpp
 #pragma once
-#include <cstdio>
 #include <cstdlib>
+#include <print>
+#include <utility>
 
 namespace DSEngine::Util
 {
 
-[[noreturn]] inline void panic(const char *file, int line, const char *func, const char *msg = nullptr) noexcept
+[[noreturn]] inline void panic_base(const char *file, int line, const char *func, std::string_view msg = {}) noexcept
 {
-    if (msg)
-        std::fprintf(stderr, "[PANIC] %s:%d (%s): %s\n", file, line, func, msg);
+    if (!msg.empty())
+        std::println(stderr, "[PANIC] {}:{} ({}): {}", file, line, func, msg);
     else
-        std::fprintf(stderr, "[PANIC] %s:%d (%s)\n", file, line, func);
+        std::println(stderr, "[PANIC] {}:{} ({})", file, line, func);
     std::abort();
 }
 
 template <class... Args>
-[[noreturn]] inline void panic_fmt(const char *file, int line, const char *func, const char *fmt, Args &&...args) noexcept
+[[noreturn]] inline void panic_fmt(const char *file, int line, const char *func, std::format_string<Args...> fmt, Args &&...args) noexcept
 {
-    std::fprintf(stderr, "[PANIC] %s:%d (%s): ", file, line, func);
-    std::fprintf(stderr, fmt, std::forward<Args>(args)...);
-    std::fprintf(stderr, "\n");
+    std::print(stderr, "[PANIC] {}:{} ({}): ", file, line, func);
+    std::print(stderr, fmt, std::forward<Args>(args)...);
+    std::fputc('\n', stderr);
     std::abort();
 }
 
 } // namespace DSEngine::Util
 
-#define PANIC() \
-    ::DSEngine::Util::panic(__FILE__, __LINE__, __func__)
+// unified macro
+#define PANIC(...)                                                                  \
+    do                                                                              \
+    {                                                                               \
+        if constexpr (sizeof(#__VA_ARGS__) == 1)                                    \
+        {                                                                           \
+            ::DSEngine::Util::panic_base(__FILE__, __LINE__, __func__);             \
+        }                                                                           \
+        else                                                                        \
+        {                                                                           \
+            ::DSEngine::Util::panic_fmt(__FILE__, __LINE__, __func__, __VA_ARGS__); \
+        }                                                                           \
+    } while (0)
 
-#define PANIC_MSG(...) \
-    ::DSEngine::Util::panic_fmt(__FILE__, __LINE__, __func__, __VA_ARGS__)
-
-#define DS_ASSERT(cond)                                                                        \
-    do                                                                                         \
-    {                                                                                          \
-        if (!(cond))                                                                           \
-        {                                                                                      \
-            ::DSEngine::Util::panic(__FILE__, __LINE__, __func__, "Assertion failed: " #cond); \
-        }                                                                                      \
+#define DS_ASSERT(cond)                                                                             \
+    do                                                                                              \
+    {                                                                                               \
+        if (!(cond))                                                                                \
+        {                                                                                           \
+            ::DSEngine::Util::panic_base(__FILE__, __LINE__, __func__, "Assertion failed: " #cond); \
+        }                                                                                           \
     } while (0)
