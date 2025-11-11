@@ -175,6 +175,9 @@ struct EngineContext
     SDL_Window *m_window = nullptr;
     ImVec4 m_clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
+    int m_window_width = -1;
+    int m_window_height = -1;
+
     inline void print_window_info() const noexcept { SDL::print_window_info(m_window); }
     inline void print_extensions() const noexcept
     {
@@ -201,6 +204,21 @@ struct EngineContext
         setup_vulkan_();
         setup_vulkan_window_();
         setup_imgui_();
+    }
+
+    void recreate_window()
+    {
+        ImGui_ImplVulkanH_CreateOrResizeWindow(
+            m_instance,
+            m_physical_device,
+            m_device,
+            &m_main_window_data,
+            m_queue_family,
+            m_allocator,
+            m_window_width,
+            m_window_height,
+            m_min_image_count,
+            0);
     }
 
 private:
@@ -400,8 +418,7 @@ private:
         }
 
         // Create Framebuffers
-        int window_width, window_height;
-        SDL_GetWindowSize(m_window, &window_width, &window_height);
+        SDL_GetWindowSize(m_window, &m_window_width, &m_window_height);
         m_main_window_data.Surface = m_surface;
 
         // Check for WSI support
@@ -417,17 +434,7 @@ private:
         m_main_window_data.SurfaceFormat = m_surface_format;
         m_main_window_data.PresentMode = m_present_mode;
         DS_ASSERT(m_min_image_count >= 2);
-        ImGui_ImplVulkanH_CreateOrResizeWindow(
-            m_instance,
-            m_physical_device,
-            m_device,
-            &m_main_window_data,
-            m_queue_family,
-            m_allocator,
-            window_width,
-            window_height,
-            m_min_image_count,
-            0);
+        recreate_window();
         SDL_SetWindowPosition(m_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
         SDL_ShowWindow(m_window);
     }
@@ -800,13 +807,11 @@ int main()
         }
 
         // Resize swap chain?
-        int fb_width;
-        int fb_height;
-        SDL_GetWindowSize(window, &fb_width, &fb_height);
-        if (fb_width > 0 && fb_height > 0 && (g_SwapChainRebuild || g_MainWindowData.Width != fb_width || g_MainWindowData.Height != fb_height))
+        SDL_GetWindowSize(window, &ctx.m_width, &ctx.m_height);
+        if (ctx.m_width > 0 && ctx.m_height > 0 && (g_SwapChainRebuild || g_MainWindowData.Width != ctx.m_width || g_MainWindowData.Height != ctx.m_height))
         {
             ImGui_ImplVulkan_SetMinImageCount(g_MinImageCount);
-            ImGui_ImplVulkanH_CreateOrResizeWindow(g_Instance, g_PhysicalDevice, g_Device, wd, g_QueueFamily, g_Allocator, fb_width, fb_height, g_MinImageCount, 0);
+            ImGui_ImplVulkanH_CreateOrResizeWindow(g_Instance, g_PhysicalDevice, g_Device, wd, g_QueueFamily, g_Allocator, ctx.m_width, ctx.m_height, g_MinImageCount, 0);
             g_MainWindowData.FrameIndex = 0;
             g_SwapChainRebuild = false;
         }
@@ -847,8 +852,7 @@ int main()
         {
             ImGui::Begin("Another Window", &show_another_window); // Pass a pointer to our bool variable (the window will have a closing button that will clear the bool when clicked)
             ImGui::Text("Hello from another window!");
-            if (ImGui::Button("Close Me"))
-                show_another_window = false;
+            if (ImGui::Button("Close Me")) show_another_window = false;
             ImGui::End();
         }
 
